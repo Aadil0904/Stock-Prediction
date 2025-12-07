@@ -1,9 +1,3 @@
-Here is a comprehensive and updated `README.md` for your project. It includes the new installation steps (especially for Apple Silicon), the security fixes (using `.env`), and details about the Machine Learning features.
-
-You can save this as **`README.md`** in your project folder.
-
----
-
 # 📈 MACD & LSTM Stock Predictor
 
 A full-stack web application for stock market analysis. It combines technical indicators (**MACD**), deep learning price forecasting (**LSTM**), and news sentiment analysis (**NLP**) into a modern, interactive dashboard.
@@ -143,7 +137,3 @@ This tool is for **educational and research purposes only**. It is not financial
 - Stock predictions are based on historical patterns and cannot guarantee future results.
 - Sentiment analysis is automated and may misinterpret complex financial news.
 - Always do your own research before investing.
-
-## 📄 License
-
-MIT License - feel free to use and modify this project for your portfolio\!
