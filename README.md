@@ -1,43 +1,54 @@
 # 📈 Agentic AI Stock Predictor
 
-A sophisticated **Multi-Agent System** for stock market analysis. This application moves beyond traditional scripts by employing a team of five autonomous AI agents that collaborate to analyze data, forecast prices, read news, and simulate trading strategies.
+A sophisticated **Autonomous Agentic System** for stock market analysis. This application moves beyond traditional scripts by employing a **Cognitive AI Agent** that dynamically plans, reasons, and executes tasks using a suite of specialized tools.
 
 ## 🤖 The Agentic Architecture
 
-Instead of a monolithic script, this project utilizes an **Orchestrator Pattern** where a central manager coordinates specialized agents:
+Unlike traditional "Orchestrator" systems that follow a hardcoded script, this project uses a **ReAct (Reasoning + Acting) Loop** powered by **LangChain** and **Google Gemini**.
 
-1.  **🕵️‍♂️ Market Data Agent ("The Librarian")**
-    - **Role:** Autonomous data acquisition.
-    - **Capabilities:** Decides when to fetch fresh data vs. serving cached data to prevent API rate limits. Handles data cleaning and multi-index flattening.
-2.  **📈 Technical Analyst Agent ("The Chartist")**
-    - **Role:** Pattern recognition.
-    - **Capabilities:** Computes technical indicators (MACD, Signal Line, EMA) and independently generates Buy/Sell signals based on crossovers.
-3.  **🔮 Prediction Agent ("The Futurist")**
-    - **Role:** Quantitative forecasting.
-    - **Capabilities:** Manages a Deep Learning **LSTM** model. Handles training loops, data normalization, and generates 7-day price forecasts.
-4.  **🧠 Sentiment Agent ("The Analyst")**
-    - **Role:** Qualitative reasoning (Cognitive Agent).
-    - **Capabilities:** Powered by **Google Gemini (LLM)**. It reads unstructured financial news, weighs conflicting headlines, and outputs a nuanced sentiment score with reasoning. Includes self-healing retry logic for API limits.
-5.  **💼 Portfolio Manager Agent ("The Trader")**
-    - **Role:** Risk and strategy execution.
-    - **Capabilities:** Simulates a real-world trading account ($10k start). Calculates ROI, Portfolio Value, and Win Rate while accounting for transaction fees.
+**How it works:**
+
+1.  **User Query:** You ask a natural language question (e.g., _"Should I buy Apple? Check sentiment and technicals"_).
+2.  **Cognitive Reasoning:** The "Brain" (Gemini 2.0 Flash) analyzes the request and creates a plan.
+3.  **Dynamic Tool Selection:** The AI autonomously decides which tools to use and in what order. It might fetch data, then read news, then run a prediction—or skip steps if they aren't needed.
+4.  **Synthesis:** The Agent combines quantitative data (charts/prices) with qualitative data (news) to give a human-like recommendation.
+
+### The Toolkit (Specialized Agents)
+
+The AI has access to these autonomous tools:
+
+- **🕵️‍♂️ Market Data Tool ("The Librarian")**
+  - **Role:** Autonomous data acquisition.
+  - **Capabilities:** Smart caching of stock data via `yfinance`. Prevents API rate limits and handles data cleaning.
+- **📈 Technical Analyst Tool ("The Chartist")**
+  - **Role:** Pattern recognition.
+  - **Capabilities:** Computes MACD, Signal Lines, and EMAs to generate independent Buy/Sell signals.
+- **🔮 Prediction Tool ("The Futurist")**
+  - **Role:** Quantitative forecasting.
+  - **Capabilities:** Runs a Deep Learning **LSTM** model to generate 7-day price forecasts.
+- **🧠 Sentiment Tool ("The Analyst")**
+  - **Role:** Qualitative reasoning.
+  - **Capabilities:** Powered by **Google Gemini**. Reads unstructured financial news and outputs a nuanced sentiment score with reasoning.
+- **💼 Portfolio Tool ("The Trader")**
+  - **Role:** Risk and strategy execution.
+  - **Capabilities:** Simulates a trading account ($10k start) to calculate ROI, Win Rate, and Net Profit.
 
 ---
 
 ## 🚀 Features
 
-- **Real-Time Data:** Smart caching with `yfinance` to ensure speed and reliability.
+- **💬 Conversational AI:** Chat directly with the agent. Ask complex, multi-step questions like _"Compare the sentiment of Tesla vs. Ford."_
+- **🧠 True Autonomy:** The system handles errors and ambiguity (e.g., correcting typos in tickers) without crashing.
+- **Real-Time Data:** Smart caching with `yfinance` to ensure speed.
 - **Deep Learning:** LSTM Neural Network for time-series forecasting.
-- **Generative AI:** LLM-based sentiment analysis that understands financial context better than simple NLP.
-- **Realistic Backtesting:** Simulation includes fees and compounding portfolio value.
-- **Modern UI:** Responsive, dark-themed dashboard with interactive charts.
+- **Modern UI:** Responsive, dark-themed dashboard with interactive charts and a new AI Chat interface.
 
 ---
 
 ## 🛠️ Tech Stack
 
-- **Architecture:** Multi-Agent System (Python)
-- **LLM:** Google Gemini 2.0 Flash / Pro
+- **Agent Framework:** LangChain (Python)
+- **LLM (The Brain):** Google Gemini 2.0 Flash / 1.5 Flash
 - **Deep Learning:** TensorFlow / Keras (LSTM)
 - **Backend:** Flask
 - **Data:** Pandas, NumPy, YFinance
@@ -49,7 +60,7 @@ Instead of a monolithic script, this project utilizes an **Orchestrator Pattern*
 
 ### Prerequisites
 
-- **Python 3.10** or **3.11** (Strict requirement for TensorFlow on some platforms)
+- **Python 3.10** or **3.11** (Strict requirement for TensorFlow)
 - **Git**
 
 ### Option A: For Apple Silicon (M1/M2/M3 Macs) - _Recommended_
@@ -115,8 +126,9 @@ Standard installation using `pip`.
     ```
 3.  Open your browser and navigate to:
     ```
-    http://localhost:5000
+    http://localhost:5001
     ```
+    _(Note: The application runs on port 5001 to avoid conflicts with AirPlay/Control Center on macOS)_
 
 ---
 
@@ -124,25 +136,25 @@ Standard installation using `pip`.
 
 ```text
 macd-stock-predictor/
-├── agents.py              # The "Brains": Class definitions for all 5 Agents
-├── app.py                 # The "Manager": Flask app orchestrating the agents
-├── lstm_model.py          # Deep Learning model logic (used by PredictionAgent)
-├── sentiment_analyzer.py  # LLM interaction logic (used by SentimentAgent)
-├── requirements.txt       # Dependencies
+├── agents.py              # The "Toolkit": LangChain tools and Agent logic
+├── app.py                 # The "Brain": Agent Executor & Flask routes
+├── lstm_model.py          # Deep Learning model logic
+├── sentiment_analyzer.py  # LLM interaction logic
+├── requirements.txt       # Dependencies (includes langchain, google-genai)
 ├── .env                   # API Keys (Excluded from Git)
 ├── static/
-│   ├── index.html         # Dashboard UI
+│   ├── index.html         # Dashboard UI with Chat Interface
 │   ├── css/style.css      # Styling
-│   └── js/main.js         # Frontend Logic
+│   └── js/main.js         # Frontend Logic & Defensive Checks
 └── README.md              # Documentation
 ```
 
----
-
 ## ⚠️ Disclaimer
 
-This tool is for **educational and research purposes only**. It demonstrates the application of Agentic AI in finance but is not financial advice.
+This tool is for educational and research purposes only. It demonstrates the application of Agentic AI in finance but is not financial advice.
 
-- Stock predictions are based on historical patterns and cannot guarantee future results.
-- LLM hallucinations are possible; always verify news sources.
-- Always do your own research before investing.
+-> Stock predictions are based on historical patterns and cannot guarantee future results.
+
+-> LLM hallucinations are possible; always verify news sources.
+
+-> Always do your own research before investing.
