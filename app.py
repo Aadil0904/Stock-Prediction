@@ -100,40 +100,67 @@ def generate_signals(df):
     return real_long, real_short
 
 def calculate_profits(df, buy_indices, sell_indices):
-    if not buy_indices or not sell_indices:
-        return {'total_profit': 0, 'avg_profit_pct': 0, 'num_trades': 0, 'win_rate': 0}
+    """
+    Simulates a real trading account starting with $10,000.
+    """
+    INITIAL_CAPITAL = 10000.0
+    TRANSACTION_FEE = 0.001  # 0.1% fee per trade (realistic for many brokers)
     
-    # Safely extract Open prices as 1D float arrays
-    open_prices = df['Open'].values.flatten()
+    cash = INITIAL_CAPITAL
+    shares = 0
+    trade_log = []
     
-    try:
-        buy_prices = [float(open_prices[i]) for i in buy_indices]
-        sell_prices = [float(open_prices[i]) for i in sell_indices]
-    except (IndexError, ValueError) as e:
-        print(f"Error extracting prices: {e}")
-        return {'total_profit': 0, 'avg_profit_pct': 0, 'num_trades': 0, 'win_rate': 0}
+    # Create a unified list of events: (index, 'buy'/'sell', price)
+    events = []
+    for i in buy_indices:
+        events.append((i, 'buy', df['Open'].iloc[i]))
+    for i in sell_indices:
+        events.append((i, 'sell', df['Open'].iloc[i]))
     
-    if not buy_prices or not sell_prices:
-        return {'total_profit': 0, 'avg_profit_pct': 0, 'num_trades': 0, 'win_rate': 0}
+    # Sort events by time (index)
+    events.sort(key=lambda x: x[0])
+    
+    for _, action, price in events:
+        if action == 'buy' and cash > 0:
+            # Buy as many shares as possible
+            # Cost = Shares * Price * (1 + Fee)
+            # Shares = Cash / (Price * (1 + Fee))
+            shares_to_buy = cash / (price * (1 + TRANSACTION_FEE))
+            shares = shares_to_buy
+            cash = 0 # All cash converted to shares
+            
+        elif action == 'sell' and shares > 0:
+            # Sell all shares
+            # Revenue = Shares * Price * (1 - Fee)
+            revenue = shares * price * (1 - TRANSACTION_FEE)
+            cash = revenue
+            shares = 0
+            
+    # Calculate final value
+    final_value = cash if cash > 0 else (shares * df['Open'].iloc[-1])
+    total_profit = final_value - INITIAL_CAPITAL
+    roi = (total_profit / INITIAL_CAPITAL) * 100
+    
+    # Win rate calculation (simplified pairs)
+    winning_trades = 0
+    total_completed_trades = min(len(buy_indices), len(sell_indices))
+    
+    if total_completed_trades > 0:
+        # Check simplified logic for win rate on pairs
+        for i in range(total_completed_trades):
+            b = df['Open'].iloc[buy_indices[i]]
+            s = df['Open'].iloc[sell_indices[i]]
+            if s > b: winning_trades += 1
+            
+    win_rate = (winning_trades / total_completed_trades * 100) if total_completed_trades > 0 else 0
 
-    # Align trades
-    if sell_prices and buy_prices and (sell_indices[0] < buy_indices[0]):
-        sell_prices = sell_prices[1:]
-    
-    min_len = min(len(buy_prices), len(sell_prices))
-    buy_prices = buy_prices[:min_len]
-    sell_prices = sell_prices[:min_len]
-    
-    profits = [(s - b) for s, b in zip(sell_prices, buy_prices)]
-    rel_profits = [(p / b * 100) for p, b in zip(profits, buy_prices) if b != 0]
-    
-    winning = sum(1 for p in profits if p > 0)
-    
     return {
-        'total_profit': float(sum(profits)),
-        'avg_profit_pct': float(np.mean(rel_profits)) if rel_profits else 0,
-        'num_trades': len(profits),
-        'win_rate': (winning / len(profits) * 100) if profits else 0
+        'total_profit': round(total_profit, 2),
+        'roi': round(roi, 2),
+        'final_value': round(final_value, 2),
+        'num_trades': len(events),
+        'win_rate': round(win_rate, 2),
+        'initial_capital': INITIAL_CAPITAL
     }
 
 @app.route('/')
