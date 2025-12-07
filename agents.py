@@ -1,167 +1,196 @@
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import datetime
 import time
-import os
+from langchain.tools import tool
 from lstm_model import predict_stock_price
 from sentiment_analyzer import get_stock_sentiment
 
-# --- BASE AGENT ---
+# ==========================================
+# PART 1: ORIGINAL AGENT CLASSES (With Debugging)
+# ==========================================
+
 class Agent:
     def __init__(self, name):
         self.name = name
-
     def log(self, message):
         print(f"[{self.name}] {message}")
 
-# --- 1. MARKET DATA AGENT ---
 class MarketDataAgent(Agent):
-    """Fetches and manages stock data with caching."""
     def __init__(self):
         super().__init__("MarketDataAgent")
         self.cache = {}
-        self.cache_duration = 300  # 5 minutes
+        self.cache_duration = 300
 
-    def get_data(self, ticker, interval='1d', period='max'):
+    def get_data(self, ticker, interval='1d', period='1y'):
         cache_key = f"{ticker}_{interval}_{period}"
-        now = time.time()
-
-        # Check Cache
         if cache_key in self.cache:
-            if now - self.cache[cache_key]['timestamp'] < self.cache_duration:
-                self.log(f"Returning cached data for {ticker}")
+            if time.time() - self.cache[cache_key]['timestamp'] < self.cache_duration:
                 return self.cache[cache_key]['data']
-
-        self.log(f"Fetching fresh data for {ticker}...")
+        
         try:
-            df = yf.download(ticker, interval=interval, period=period, progress=False, auto_adjust=True)
+            # self.log(f"Fetching data for {ticker}...")
+            df = yf.download(ticker, interval=interval, period=period, progress=False)
             
-            # Clean Data (Flatten MultiIndex & Numeric Conversion)
+            # Handle MultiIndex columns (common in new yfinance)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             
-            numeric_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
-            for col in numeric_cols:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
+            cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+            for c in cols:
+                if c in df.columns: df[c] = pd.to_numeric(df[c], errors='coerce')
             
             df.dropna(inplace=True)
-
-            if not df.empty:
-                self.cache[cache_key] = {'data': df, 'timestamp': now}
             
+            if not df.empty:
+                self.cache[cache_key] = {'data': df, 'timestamp': time.time()}
             return df
         except Exception as e:
-            self.log(f"Error: {e}")
+            self.log(f"Error fetching data: {e}")
             return pd.DataFrame()
 
-# --- 2. TECHNICAL ANALYST AGENT ---
 class TechnicalAnalystAgent(Agent):
-    """Calculates indicators and generates signals."""
     def __init__(self):
         super().__init__("TechnicalAnalystAgent")
 
     def analyze(self, df):
-        self.log("Calculating MACD and generating signals...")
         df = df.copy()
-        
         # Calculate MACD
-        close = df['Close'] if isinstance(df['Close'], pd.Series) else df['Close'].iloc[:, 0]
+        close = df['Close']
         df['EMA_12'] = close.ewm(span=12, adjust=False).mean()
         df['EMA_26'] = close.ewm(span=26, adjust=False).mean()
         df['MACD'] = df['EMA_12'] - df['EMA_26']
         df['signal_line'] = df['MACD'].ewm(span=9, adjust=False).mean()
 
-        # Generate Signals
-        macd = df['MACD'].values.flatten()
-        signal = df['signal_line'].values.flatten()
-        long_signals, short_signals = [], []
+        macd = df['MACD'].values
+        signal = df['signal_line'].values
+        buy_indices = []
+        sell_indices = []
 
-        for i in range(2, len(df)):
-            if macd[i] > signal[i] and macd[i-1] < signal[i-1]:
-                long_signals.append(i)
-            elif macd[i] < signal[i] and macd[i-1] > signal[i-1]:
-                short_signals.append(i)
+        # Find Crossovers
+        for i in range(1, len(df)):
+            if macd[i] > signal[i] and macd[i-1] <= signal[i-1]:
+                buy_indices.append(i)
+            elif macd[i] < signal[i] and macd[i-1] >= signal[i-1]:
+                sell_indices.append(i)
         
-        # Execution on NEXT candle
-        buy_indices = [i+1 for i in long_signals if i+1 < len(df)]
-        sell_indices = [i+1 for i in short_signals if i+1 < len(df)]
-
+        self.log(f"Found {len(buy_indices)} Buy signals and {len(sell_indices)} Sell signals")
         return df, buy_indices, sell_indices
 
-# --- 3. PREDICTION AGENT ---
 class PredictionAgent(Agent):
-    """Runs AI models to forecast prices."""
     def __init__(self):
         super().__init__("PredictionAgent")
-
     def predict(self, df, ticker):
-        self.log(f"Running LSTM model for {ticker}...")
-        if len(df) < 100:
-            return {'error': 'Insufficient data'}
-        
-        try:
-            return predict_stock_price(df, lookback=60, prediction_days=7, epochs=5)
-        except Exception as e:
-            self.log(f"Prediction failed: {e}")
-            return {'error': str(e)}
+        if len(df) < 50: return {'error': 'Insufficient data'}
+        return predict_stock_price(df)
 
-# --- 4. SENTIMENT AGENT ---
 class SentimentAgent(Agent):
-    """Analyzes news sentiment."""
     def __init__(self):
         super().__init__("SentimentAgent")
-
     def analyze(self, ticker):
-        self.log(f"Analyzing news sentiment for {ticker}...")
-        return get_stock_sentiment(ticker, days=7)
+        return get_stock_sentiment(ticker)
 
-# --- 5. PORTFOLIO MANAGER AGENT ---
 class PortfolioManagerAgent(Agent):
-    """Simulates trading and calculates risk/reward."""
-    def __init__(self, initial_capital=10000.0, transaction_fee=0.001):
+    def __init__(self, initial_capital=10000.0):
         super().__init__("PortfolioManager")
-        self.initial_capital = initial_capital
-        self.fee = transaction_fee
+        self.capital = initial_capital
 
-    def backtest(self, df, buy_indices, sell_indices):
-        self.log("Running backtest simulation...")
-        cash = self.initial_capital
+    def backtest(self, df, buy_idx, sell_idx):
+        cash = self.capital
         shares = 0
-        open_prices = df['Open'].values.flatten()
-
-        events = []
-        for i in buy_indices: events.append((i, 'buy', float(open_prices[i])))
-        for i in sell_indices: events.append((i, 'sell', float(open_prices[i])))
-        events.sort(key=lambda x: x[0])
-
-        for _, action, price in events:
-            if action == 'buy' and cash > 0:
-                shares = cash / (price * (1 + self.fee))
-                cash = 0
-            elif action == 'sell' and shares > 0:
-                cash = shares * price * (1 - self.fee)
-                shares = 0
+        opens = df['Open'].values
         
-        final_value = cash if cash > 0 else (shares * float(open_prices[-1]))
-        total_profit = final_value - self.initial_capital
-        roi = (total_profit / self.initial_capital) * 100
-        
-        # Calculate Win Rate
+        # Combine buy/sell events and sort by time
+        events = [(i, 'buy') for i in buy_idx] + [(i, 'sell') for i in sell_idx]
+        events.sort()
+
         wins = 0
-        trades = min(len(buy_indices), len(sell_indices))
-        if trades > 0:
-            for i in range(trades):
-                if open_prices[sell_indices[i]] > open_prices[buy_indices[i]]:
+        closed_trades = 0
+        last_buy_price = 0
+        
+        self.log(f"Starting backtest with ${self.capital} and {len(events)} events.")
+
+        for i, action in events:
+            price = float(opens[i])
+            if action == 'buy' and cash > price:
+                shares = cash / price
+                cash = 0
+                last_buy_price = price
+            elif action == 'sell' and shares > 0:
+                cash = shares * price
+                shares = 0
+                closed_trades += 1
+                if price > last_buy_price:
                     wins += 1
         
-        win_rate = (wins / trades * 100) if trades > 0 else 0
+        # Calculate final portfolio value
+        final_val = cash + (shares * float(opens[-1])) if shares > 0 else cash
+        profit = final_val - self.capital
+        roi = (profit / self.capital) * 100 if self.capital > 0 else 0
+        win_rate = (wins / closed_trades * 100) if closed_trades > 0 else 0
+
+        self.log(f"Backtest Result: Profit=${profit:.2f}, ROI={roi:.2f}%")
 
         return {
-            'total_profit': round(total_profit, 2),
+            'total_profit': round(profit, 2),
             'roi': round(roi, 2),
-            'final_value': round(final_value, 2),
-            'num_trades': len(events),
-            'win_rate': round(win_rate, 2)
+            'final_value': round(final_val, 2),
+            'win_rate': round(win_rate, 2),
+            'num_trades': len(events)
         }
+
+# ==========================================
+# PART 2: AGENTIC TOOLS (For Chat)
+# ==========================================
+market_agent = MarketDataAgent()
+tech_agent = TechnicalAnalystAgent()
+pred_agent = PredictionAgent()
+sent_agent = SentimentAgent()
+
+@tool
+def fetch_stock_price(ticker: str):
+    """Fetches the latest stock price."""
+    df = market_agent.get_data(ticker)
+    if df.empty: return "No data found."
+    return f"Latest Close for {ticker}: {df.iloc[-1]['Close']:.2f}"
+
+@tool
+def analyze_technicals(ticker: str):
+    """Checks MACD technical signals."""
+    df = market_agent.get_data(ticker)
+    if df.empty: return "No data."
+    _, buys, sells = tech_agent.analyze(df)
+    
+    last_signal = "NEUTRAL"
+    if buys and sells:
+        last_signal = "BUY" if buys[-1] > sells[-1] else "SELL"
+    elif buys:
+        last_signal = "BUY"
+    elif sells:
+        last_signal = "SELL"
+        
+    return f"Technical signal is {last_signal}."
+
+@tool
+def get_market_sentiment(ticker: str):
+    """Gets news sentiment score."""
+    res = sent_agent.analyze(ticker)
+    return f"Sentiment: {res.get('sentiment_label', 'Unknown')} (Score: {res.get('overall_sentiment', 0)})."
+
+@tool
+def predict_future_price(ticker: str):
+    """Predicts next day price."""
+    df = market_agent.get_data(ticker)
+    res = pred_agent.predict(df, ticker)
+    
+    # Safely extract the prediction number
+    if 'predictions' in res and len(res['predictions']) > 0:
+        price = res['predictions'][0]
+        # Handle case where prediction might be a list inside a list
+        if isinstance(price, list) or isinstance(price, np.ndarray):
+            price = price[0]
+        return f"Predicted price: {float(price):.2f}"
+        
+    return "Prediction failed."
+
+stock_tools = [fetch_stock_price, analyze_technicals, get_market_sentiment, predict_future_price]

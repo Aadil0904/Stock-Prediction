@@ -22,7 +22,7 @@ class SentimentAnalyzer:
         self.gemini_key = os.environ.get('GEMINI_API_KEY')
         if self.gemini_key:
             genai.configure(api_key=self.gemini_key)
-            self.model = genai.GenerativeModel('gemini-2.5-flash') # Or 'gemini-pro'
+            self.model = genai.GenerativeModel('gemini-2.5-flash-lite') # Or 'gemini-pro'
         else:
             print("⚠️ Warning: GEMINI_API_KEY not found. Sentiment analysis will fail.")
 
