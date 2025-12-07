@@ -1,167 +1,28 @@
 from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
-import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime
-import time
-import os
 from dotenv import load_dotenv
 
-# Load API keys from .env file
+# Import our new Agents
+from agents import (
+    MarketDataAgent, 
+    TechnicalAnalystAgent, 
+    PredictionAgent, 
+    SentimentAgent, 
+    PortfolioManagerAgent
+)
+
 load_dotenv()
-
-# --- ML IMPORTS ---
-try:
-    from lstm_model import predict_stock_price
-    ML_AVAILABLE = True
-    print("✅ Machine Learning modules loaded successfully.")
-except ImportError as e:
-    ML_AVAILABLE = False
-    print(f"⚠️  ML modules not found: {e}. Prediction feature will be disabled.")
-
-from sentiment_analyzer import get_stock_sentiment
-
 app = Flask(__name__, static_folder='static', template_folder='static')
 CORS(app)
 
-# --- IN-MEMORY CACHE ---
-data_cache = {}
-CACHE_DURATION = 300  # 5 minutes
-
-def get_cached_data(ticker, interval, period):
-    """Fetches data from Yahoo Finance or Cache to prevent rate limits."""
-    # Create a unique key for the cache
-    cache_key = f"{ticker}_{interval}_{period}"
-    now = time.time()
-    
-    # Check cache validity
-    if cache_key in data_cache:
-        entry = data_cache[cache_key]
-        if now - entry['timestamp'] < CACHE_DURATION:
-            return entry['data']
-    
-    try:
-        # Download data
-        df = yf.download(ticker, interval=interval, period=period, progress=False, auto_adjust=True)
-        
-        # --- CRITICAL FIXES FOR DATA FORMAT ---
-        
-        # 1. Flatten MultiIndex columns (Fixes 'DataFrame has no attribute tolist')
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-            
-        # 2. Ensure data is numeric (Fixes 'str - str' error)
-        numeric_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-        # 3. Drop any rows with missing data (NaNs) created by conversion
-        df.dropna(inplace=True)
-
-        if not df.empty:
-            data_cache[cache_key] = {'data': df, 'timestamp': now}
-            
-        return df
-    except Exception as e:
-        print(f"Error fetching data: {e}")
-        return pd.DataFrame()
-
-def calculate_macd(df):
-    df = df.copy()
-    # Ensure 'Close' is a Series (single list of numbers)
-    if isinstance(df['Close'], pd.DataFrame):
-        close_prices = df['Close'].iloc[:, 0]
-    else:
-        close_prices = df['Close']
-
-    df['EMA_12'] = close_prices.ewm(span=12, adjust=False).mean()
-    df['EMA_26'] = close_prices.ewm(span=26, adjust=False).mean()
-    df['MACD'] = df['EMA_12'] - df['EMA_26']
-    df['signal_line'] = df['MACD'].ewm(span=9, adjust=False).mean()
-    return df
-
-def generate_signals(df):
-    long, short = [], []
-    
-    # Ensure columns are 1D arrays for comparison
-    macd = df['MACD'].values.flatten()
-    signal = df['signal_line'].values.flatten()
-    
-    for i in range(2, len(df)):
-        if macd[i] > signal[i] and macd[i-1] < signal[i-1]:
-            long.append(i)
-        elif macd[i] < signal[i] and macd[i-1] > signal[i-1]:
-            short.append(i)
-    
-    real_long = [i+1 for i in long if i+1 < len(df)]
-    real_short = [i+1 for i in short if i+1 < len(df)]
-    return real_long, real_short
-
-def calculate_profits(df, buy_indices, sell_indices):
-    """
-    Simulates a real trading account starting with $10,000.
-    """
-    INITIAL_CAPITAL = 10000.0
-    TRANSACTION_FEE = 0.001  # 0.1% fee per trade (realistic for many brokers)
-    
-    cash = INITIAL_CAPITAL
-    shares = 0
-    trade_log = []
-    
-    # Create a unified list of events: (index, 'buy'/'sell', price)
-    events = []
-    for i in buy_indices:
-        events.append((i, 'buy', df['Open'].iloc[i]))
-    for i in sell_indices:
-        events.append((i, 'sell', df['Open'].iloc[i]))
-    
-    # Sort events by time (index)
-    events.sort(key=lambda x: x[0])
-    
-    for _, action, price in events:
-        if action == 'buy' and cash > 0:
-            # Buy as many shares as possible
-            # Cost = Shares * Price * (1 + Fee)
-            # Shares = Cash / (Price * (1 + Fee))
-            shares_to_buy = cash / (price * (1 + TRANSACTION_FEE))
-            shares = shares_to_buy
-            cash = 0 # All cash converted to shares
-            
-        elif action == 'sell' and shares > 0:
-            # Sell all shares
-            # Revenue = Shares * Price * (1 - Fee)
-            revenue = shares * price * (1 - TRANSACTION_FEE)
-            cash = revenue
-            shares = 0
-            
-    # Calculate final value
-    final_value = cash if cash > 0 else (shares * df['Open'].iloc[-1])
-    total_profit = final_value - INITIAL_CAPITAL
-    roi = (total_profit / INITIAL_CAPITAL) * 100
-    
-    # Win rate calculation (simplified pairs)
-    winning_trades = 0
-    total_completed_trades = min(len(buy_indices), len(sell_indices))
-    
-    if total_completed_trades > 0:
-        # Check simplified logic for win rate on pairs
-        for i in range(total_completed_trades):
-            b = df['Open'].iloc[buy_indices[i]]
-            s = df['Open'].iloc[sell_indices[i]]
-            if s > b: winning_trades += 1
-            
-    win_rate = (winning_trades / total_completed_trades * 100) if total_completed_trades > 0 else 0
-
-    return {
-        'total_profit': round(total_profit, 2),
-        'roi': round(roi, 2),
-        'final_value': round(final_value, 2),
-        'num_trades': len(events),
-        'win_rate': round(win_rate, 2),
-        'initial_capital': INITIAL_CAPITAL
-    }
+# --- INITIALIZE AGENTS ---
+market_agent = MarketDataAgent()
+tech_agent = TechnicalAnalystAgent()
+ai_agent = PredictionAgent()
+news_agent = SentimentAgent()
+portfolio_agent = PortfolioManagerAgent()
 
 @app.route('/')
 def index():
@@ -171,17 +32,16 @@ def index():
 def get_stock_data(ticker):
     interval = request.args.get('interval', '1d')
     period = request.args.get('period', '1y')
-    df = get_cached_data(ticker, interval, period)
     
-    if df.empty: 
-        return jsonify({'error': 'No data found'}), 404
+    # Agent 1: Get Data
+    df = market_agent.get_data(ticker, interval, period)
+    if df.empty: return jsonify({'error': 'No data found'}), 404
     
-    df = calculate_macd(df)
+    # Agent 2: Analyze Data
+    df, _, _ = tech_agent.analyze(df)
     
-    # Helper to convert series to list safely
-    def to_list(col_name):
-        # Flatten ensures we get a simple list even if DataFrame structure is weird
-        return df[col_name].values.flatten().tolist()
+    # Helper to convert to list
+    def to_list(col): return df[col].values.flatten().tolist()
 
     return jsonify({
         'dates': df.index.strftime('%Y-%m-%d %H:%M:%S').tolist(),
@@ -197,16 +57,14 @@ def get_stock_data(ticker):
 def get_signals(ticker):
     interval = request.args.get('interval', '1d')
     period = request.args.get('period', '1y')
-    df = get_cached_data(ticker, interval, period)
     
+    df = market_agent.get_data(ticker, interval, period)
     if df.empty: return jsonify({'error': 'No data found'}), 404
     
-    df = calculate_macd(df)
-    buy_ix, sell_ix = generate_signals(df)
+    # Agent 2: Technical Analysis
+    _, buy_ix, sell_ix = tech_agent.analyze(df)
     
-    # Safe data extraction
     open_prices = df['Open'].values.flatten()
-    
     buy_signals = [{'date': df.index[i].strftime('%Y-%m-%d %H:%M:%S'), 'price': float(open_prices[i])} for i in buy_ix]
     sell_signals = [{'date': df.index[i].strftime('%Y-%m-%d %H:%M:%S'), 'price': float(open_prices[i])} for i in sell_ix]
     
@@ -216,61 +74,46 @@ def get_signals(ticker):
 def backtest(ticker):
     interval = request.args.get('interval', '1d')
     period = request.args.get('period', '1y')
-    df = get_cached_data(ticker, interval, period)
     
+    df = market_agent.get_data(ticker, interval, period)
     if df.empty: return jsonify({'error': 'No data found'}), 404
     
-    df = calculate_macd(df)
-    buy_ix, sell_ix = generate_signals(df)
-    metrics = calculate_profits(df, buy_ix, sell_ix)
+    # Agent 2: Get Signals
+    _, buy_ix, sell_ix = tech_agent.analyze(df)
+    
+    # Agent 5: Calculate Portfolio Performance
+    metrics = portfolio_agent.backtest(df, buy_ix, sell_ix)
+    
     return jsonify(metrics)
 
 @app.route('/api/predict/<ticker>')
 def predict_price(ticker):
-    if not ML_AVAILABLE:
-        return jsonify({'error': 'ML libraries not installed.'}), 500
-
-    # FIX: Use 'max' to ensure we get enough data for the model
-    # instead of hardcoding '2y' which might fail for some stocks.
-    interval = '1d'
-    period = 'max' 
+    # Agent 1: Get Data (Request 'max' for training)
+    df = market_agent.get_data(ticker, interval='1d', period='max')
     
-    df = get_cached_data(ticker, interval, period)
+    # Agent 3: Run Prediction
+    result = ai_agent.predict(df, ticker)
     
-    # We need at least 100 data points to train the LSTM
-    if df.empty or len(df) < 100: 
-        return jsonify({'error': f'Not enough historical data for {ticker} (found {len(df)} days, need 100+)'}), 404
-    
-    try:
-        print(f"🤖 Training LSTM for {ticker} with {len(df)} days of data...")
+    if 'error' not in result:
+        last_date = df.index[-1]
+        future_dates = pd.date_range(start=last_date, periods=8, freq='D')[1:]
+        result['prediction_dates'] = future_dates.strftime('%Y-%m-%d').tolist()
         
-        # Use a slightly larger lookback if we have plenty of data
-        lookback_days = 60
-        
-        result = predict_stock_price(df, lookback=lookback_days, prediction_days=7, epochs=5)
-        
-        if 'error' not in result:
-            last_date = df.index[-1]
-            future_dates = pd.date_range(start=last_date, periods=8, freq='D')[1:]
-            result['prediction_dates'] = future_dates.strftime('%Y-%m-%d').tolist()
-            
-        return jsonify(result)
-    except Exception as e:
-        print(f"LSTM Error: {e}")
-        return jsonify({'error': str(e)}), 500
+    return jsonify(result)
 
 @app.route('/api/sentiment/<ticker>')
 def get_sentiment(ticker):
-    days = int(request.args.get('days', 7))
-    result = get_stock_sentiment(ticker, days=days)
+    # Agent 4: Analyze Sentiment
+    result = news_agent.analyze(ticker)
     return jsonify(result)
 
 if __name__ == '__main__':
     print("="*50)
-    print("🚀 MACD & LSTM Stock Server Running")
-    if ML_AVAILABLE:
-        print("✅ TensorFlow/ML: ENABLED (Apple Silicon Optimized)")
-    else:
-        print("❌ TensorFlow/ML: DISABLED")
+    print("🤖 Agentic AI Stock System Initialized")
+    print("   - MarketDataAgent: Ready")
+    print("   - TechnicalAnalystAgent: Ready")
+    print("   - PredictionAgent: Ready")
+    print("   - SentimentAgent: Ready")
+    print("   - PortfolioManagerAgent: Ready")
     print("="*50)
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=5001)
