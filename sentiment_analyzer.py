@@ -1,116 +1,144 @@
-from newsapi import NewsApiClient
-from textblob import TextBlob
-from datetime import datetime, timedelta
 import os
+import json
+import google.generativeai as genai
+from newsapi import NewsApiClient
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
 class SentimentAnalyzer:
-    """Analyze stock sentiment from news articles"""
+    """Analyze stock sentiment using Google Gemini"""
     
-    def __init__(self, api_key=None):
-        # SECURE FIX: Fetch key from environment variable if not provided
-        self.api_key = api_key or os.environ.get('NEWS_API_KEY')
+    def __init__(self):
+        # 1. Setup NewsAPI
+        self.news_api_key = os.environ.get('NEWS_API_KEY')
         self.newsapi = None
-        
-        if self.api_key:
-            try:
-                self.newsapi = NewsApiClient(api_key=self.api_key)
-            except Exception as e:
-                print(f"Warning: Could not initialize NewsAPI: {e}")
+        if self.news_api_key:
+            self.newsapi = NewsApiClient(api_key=self.news_api_key)
+            
+        # 2. Setup Google Gemini
+        self.gemini_key = os.environ.get('GEMINI_API_KEY')
+        if self.gemini_key:
+            genai.configure(api_key=self.gemini_key)
+            self.model = genai.GenerativeModel('gemini-2.5-flash') # Or 'gemini-pro'
         else:
-            print("Warning: No NEWS_API_KEY found. Sentiment analysis will be disabled.")
-    
-    def analyze_text_sentiment(self, text):
-        if not text: return 0.0
-        try:
-            return TextBlob(text).sentiment.polarity
-        except:
-            return 0.0
-    
+            print("⚠️ Warning: GEMINI_API_KEY not found. Sentiment analysis will fail.")
+
     def get_stock_news(self, ticker, days=7):
+        """Fetches news from NewsAPI"""
         if not self.newsapi: return []
         
         try:
             to_date = datetime.now()
             from_date = to_date - timedelta(days=days)
             
-            queries = [ticker]
-            # Add company mapping logic here if needed
+            # Fetch news
+            response = self.newsapi.get_everything(
+                q=ticker,
+                from_param=from_date.strftime('%Y-%m-%d'),
+                to=to_date.strftime('%Y-%m-%d'),
+                language='en',
+                sort_by='relevancy',
+                page_size=15
+            )
             
-            all_articles = []
-            for query in queries:
-                try:
-                    response = self.newsapi.get_everything(
-                        q=query,
-                        from_param=from_date.strftime('%Y-%m-%d'),
-                        to=to_date.strftime('%Y-%m-%d'),
-                        language='en',
-                        sort_by='relevancy',
-                        page_size=15
-                    )
-                    if response and 'articles' in response:
-                        all_articles.extend(response['articles'])
-                except Exception:
-                    continue
-            
-            # Deduplicate
+            if not response or 'articles' not in response:
+                return []
+
+            # Deduplicate articles
             seen = set()
-            unique = []
-            for art in all_articles:
-                if art['title'] not in seen:
+            unique_articles = []
+            for art in response['articles']:
+                if art['title'] and art['title'] not in seen:
                     seen.add(art['title'])
-                    unique.append(art)
-            return unique[:15]
+                    unique_articles.append(art)
+            
+            return unique_articles[:10] # Limit to top 10 for the LLM
             
         except Exception as e:
             print(f"Error fetching news: {e}")
             return []
 
     def analyze_stock_sentiment(self, ticker, days=7):
-        articles = self.get_stock_news(ticker, days)
+        """Uses Gemini to analyze the news list"""
         
+        # 1. Get News
+        articles = self.get_stock_news(ticker, days)
         if not articles:
             return {
                 'overall_sentiment': 0.0,
                 'sentiment_label': 'Neutral',
                 'num_articles': 0,
                 'articles': [],
-                'daily_sentiment': [],
-                'error': 'No news found or API key missing.'
+                'reasoning': "No news found."
             }
-        
-        sentiments = []
-        processed = []
-        
-        for art in articles:
-            text = f"{art.get('title', '')} {art.get('description', '')}"
-            score = self.analyze_text_sentiment(text)
-            sentiments.append(score)
-            
-            processed.append({
-                'title': art.get('title', 'No title'),
-                'url': art.get('url', '#'),
-                'source': art.get('source', {}).get('name', 'Unknown'),
-                'sentiment': round(score, 2),
-                'published_at': art.get('publishedAt', '')
-            })
-            
-        avg_score = sum(sentiments) / len(sentiments) if sentiments else 0
-        
-        if avg_score > 0.05: label = 'Positive'
-        elif avg_score < -0.05: label = 'Negative'
-        else: label = 'Neutral'
-        
-        return {
-            'overall_sentiment': round(avg_score, 3),
-            'sentiment_label': label,
-            'num_articles': len(articles),
-            'articles': processed[:5]
-        }
 
-def get_stock_sentiment(ticker, days=7, api_key=None):
-    analyzer = SentimentAnalyzer(api_key)
+        if not self.model:
+            return {'error': 'Gemini API key missing'}
+
+        # 2. Prepare Prompt for Gemini
+        headlines_text = "\n".join([f"- {a['title']} (Source: {a['source']['name']})" for a in articles])
+        
+        prompt = f"""
+        You are a financial analyst agent. Analyze the following news headlines for the stock '{ticker}':
+
+        {headlines_text}
+
+        Your task:
+        1. Determine the overall market sentiment score between -1 (Very Negative) and 1 (Very Positive).
+        2. Provide a 1-sentence reasoning summary.
+        3. Assign a sentiment label (Bullish, Bearish, or Neutral).
+
+        Return ONLY valid JSON in this format:
+        {{
+            "score": 0.0,
+            "label": "Neutral",
+            "reasoning": "Summary here..."
+        }}
+        """
+
+        try:
+            # 3. Call Gemini
+            response = self.model.generate_content(prompt)
+            
+            # 4. Clean and Parse JSON
+            # Gemini might add markdown ```json ... ``` wrappers
+            text_response = response.text.strip()
+            if text_response.startswith("```"):
+                text_response = text_response.replace("```json", "").replace("```", "")
+            
+            result = json.loads(text_response)
+            
+            # 5. Format for Frontend
+            # We map the raw articles back so the frontend can display links
+            formatted_articles = [{
+                'title': a['title'],
+                'url': a['url'],
+                'source': a['source']['name'],
+                'sentiment': 0 # We don't score individual articles to save tokens, just the aggregate
+            } for a in articles]
+
+            return {
+                'overall_sentiment': float(result.get('score', 0)),
+                'sentiment_label': result.get('label', 'Neutral'),
+                'num_articles': len(articles),
+                'articles': formatted_articles,
+                'reasoning': result.get('reasoning', '') # New field!
+            }
+
+        except Exception as e:
+            print(f"Gemini Error: {e}")
+            return {
+                'overall_sentiment': 0.0,
+                'sentiment_label': 'Error',
+                'num_articles': len(articles),
+                'articles': [],
+                'error': str(e)
+            }
+
+# Helper function used by app.py
+def get_stock_sentiment(ticker, days=7):
+    analyzer = SentimentAnalyzer()
     return analyzer.analyze_stock_sentiment(ticker, days)
